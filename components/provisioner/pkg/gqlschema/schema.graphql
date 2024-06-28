@@ -67,6 +67,7 @@ type AzureProviderConfig {
 type AWSProviderConfig {
     awsZones: [AWSZone]!
     vpcCidr: String
+    enableIMDSv2: Boolean
 }
 
 type OpenStackProviderConfig {
@@ -241,6 +242,7 @@ input GardenerConfigInput {
     shootNetworkingFilterDisabled: Boolean          # Indicator for the Shoot Networking Filter extension being disabled. If 'nil' provided, 'true' will be used as a default value
     controlPlaneFailureTolerance: String            # Shoot control plane HA failure tolerance level to configure. Valid values: 'nil' (left empty, no HA), "node", "zone"
     euAccess: Boolean                               # EU Access indicated whether to annotate the Shoot with the 'support.gardener.cloud/eu-access-for-cluster-nodes' annotation
+    shootAndSeedSameRegion: Boolean                 # If set to true, Provisioner will add seedSelector with region matching the one that shoot is created in
 }
 
 input OIDCConfigInput {
@@ -286,6 +288,7 @@ input AzureProviderConfigInput {
 input AWSProviderConfigInput {
     vpcCidr: String!        # Classless Inter-Domain Routing for the virtual public cloud
     awsZones: [AWSZoneInput]! # Zones, in which to create the cluster, configuration
+    enableIMDSv2: Boolean # Enable IMDSv2 access method only
 }
 
 input OpenStackProviderConfigInput {

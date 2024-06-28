@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	uuidMocks "github.com/kyma-project/control-plane/components/provisioner/internal/uuid/mocks"
+
 	"github.com/kyma-project/control-plane/components/provisioner/internal/api/fake/seeds"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/api/fake/shoots"
-	"github.com/kyma-project/control-plane/components/provisioner/internal/uuid"
-
 	provisioning2 "github.com/kyma-project/control-plane/components/provisioner/internal/operations/stages/provisioning"
 
 	"github.com/kyma-project/control-plane/components/provisioner/internal/api"
@@ -28,15 +28,12 @@ import (
 	gardener_types "github.com/gardener/gardener/pkg/apis/core/v1beta1"
 	gardener_apis "github.com/gardener/gardener/pkg/client/core/clientset/versioned/typed/core/v1beta1"
 
-	"github.com/kyma-incubator/compass/components/director/pkg/graphql"
-	directormock "github.com/kyma-project/control-plane/components/provisioner/internal/director/mocks"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/gardener"
 	kubeconfigprovidermock "github.com/kyma-project/control-plane/components/provisioner/internal/operations/queue/mocks"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/persistence/database"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/persistence/testutils"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/provisioning"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/provisioning/persistence/dbsession"
-	runtimeConfig "github.com/kyma-project/control-plane/components/provisioner/internal/runtime"
 	"github.com/kyma-project/control-plane/components/provisioner/internal/util"
 	"github.com/kyma-project/control-plane/components/provisioner/pkg/gqlschema"
 	"github.com/stretchr/testify/assert"
@@ -77,6 +74,7 @@ const (
 
 	defaultEnableKubernetesVersionAutoUpdate   = false
 	defaultEnableMachineImageVersionAutoUpdate = false
+	defaultEnableIMDSv2                        = true
 
 	mockedKubeconfig = `apiVersion: v1
 clusters:
@@ -99,16 +97,14 @@ users:
 `
 )
 
+const schemaFilePath = "../../assets/database/provisioner.sql"
+
 func TestProvisioning_ProvisionRuntimeWithDatabase(t *testing.T) {
 	//given
 	ctx := context.WithValue(context.Background(), middlewares.Tenant, tenant)
 	ctx = context.WithValue(ctx, middlewares.SubAccountID, subAccountId)
 
-	cleanupNetwork, err := testutils.EnsureTestNetworkForDB(t, ctx)
-	require.NoError(t, err)
-	defer cleanupNetwork()
-
-	containerCleanupFunc, connString, err := testutils.InitTestDBContainer(t, ctx, "postgres_database_2")
+	containerCleanupFunc, connString, err := testutils.InitTestDBContainer(t, ctx)
 	require.NoError(t, err)
 	defer containerCleanupFunc()
 
@@ -117,16 +113,12 @@ func TestProvisioning_ProvisionRuntimeWithDatabase(t *testing.T) {
 	require.NotNil(t, connection)
 	defer testutils.CloseDatabase(t, connection)
 
-	err = database.SetupSchema(connection, testutils.SchemaFilePath)
+	err = database.SetupSchema(connection, schemaFilePath)
 	require.NoError(t, err)
-
-	directorServiceMock := &directormock.DirectorClient{}
 
 	mockK8sClientProvider := &mocks.K8sClientProvider{}
 	fakeK8sClient := fake.NewSimpleClientset()
 	mockK8sClientProvider.On("CreateK8SClient", mockedKubeconfig).Return(fakeK8sClient, nil)
-
-	runtimeConfigurator := runtimeConfig.NewRuntimeConfigurator(mockK8sClientProvider, directorServiceMock)
 
 	auditLogsConfigPath := filepath.Join("testdata", "config.json")
 	maintenanceWindowConfigPath := filepath.Join("testdata", "maintwindow.json")
@@ -146,18 +138,16 @@ func TestProvisioning_ProvisionRuntimeWithDatabase(t *testing.T) {
 	provisioningQueue := queue.CreateProvisioningQueue(
 		testProvisioningTimeouts(),
 		dbsFactory,
-		directorServiceMock,
 		shootInterface,
 		testOperatorRoleBinding(),
 		mockK8sClientProvider,
-		runtimeConfigurator,
 		kubeconfigProviderMock)
 	provisioningQueue.Run(queueCtx.Done())
 
-	deprovisioningQueue := queue.CreateDeprovisioningQueue(testDeprovisioningTimeouts(), dbsFactory, directorServiceMock, shootInterface)
+	deprovisioningQueue := queue.CreateDeprovisioningQueue(testDeprovisioningTimeouts(), dbsFactory, shootInterface)
 	deprovisioningQueue.Run(queueCtx.Done())
 
-	shootUpgradeQueue := queue.CreateShootUpgradeQueue(testProvisioningTimeouts(), dbsFactory, directorServiceMock, shootInterface, testOperatorRoleBinding(), mockK8sClientProvider, kubeconfigProviderMock)
+	shootUpgradeQueue := queue.CreateShootUpgradeQueue(testProvisioningTimeouts(), dbsFactory, shootInterface, testOperatorRoleBinding(), mockK8sClientProvider, kubeconfigProviderMock)
 	shootUpgradeQueue.Run(queueCtx.Done())
 
 	controler, err := gardener.NewShootController(mgr, dbsFactory, auditLogsConfigPath)
@@ -180,49 +170,32 @@ func TestProvisioning_ProvisionRuntimeWithDatabase(t *testing.T) {
 			clusterConfig := config.provisioningInput.config
 			runtimeInput := config.provisioningInput.runtimeInput
 
-			_ = fakeK8sClient.CoreV1().Secrets(compassSystemNamespace).Delete(context.Background(), runtimeConfig.AgentConfigurationSecretName, metav1.DeleteOptions{})
-			_ = fakeK8sClient.CoreV1().ConfigMaps(compassSystemNamespace).Delete(context.Background(), runtimeConfig.AgentConfigurationSecretName, metav1.DeleteOptions{})
+			uuidGeneratorMock := &uuidMocks.UUIDGenerator{}
+			uuidGeneratorMock.On("New").Return(config.runtimeID).Once()
+			uuidGeneratorMock.On("New").Return(config.provisioningID).Once()
+			uuidGeneratorMock.On("New").Return(config.gardenerConfigID).Once()
+			uuidGeneratorMock.On("New").Return(config.upgradeID).Once()
+			uuidGeneratorMock.On("New").Return(config.deprovisioningID).Once()
 
-			directorServiceMock.Calls = nil
-			directorServiceMock.ExpectedCalls = nil
+			//uuidGeneratorMock.On("New").Return(config.upgradeID).Once()
+			//uuidGeneratorMock.On("New").Return(config.deprovisioningID).Once()
 
-			directorServiceMock.On("CreateRuntime", mock.Anything, mock.Anything).Return(config.runtimeID, nil)
-			directorServiceMock.On("RuntimeExists", mock.Anything, mock.Anything).Return(true, nil)
-			directorServiceMock.On("DeleteRuntime", mock.Anything, mock.Anything).Return(nil)
-			directorServiceMock.On("GetConnectionToken", mock.Anything, mock.Anything).Return(graphql.OneTimeTokenForRuntimeExt{}, nil)
+			provisioner := gardener.NewProvisioner(namespace, shootInterface, dbsFactory, auditLogPolicyCMName, maintenanceWindowConfigPath, false)
 
-			directorServiceMock.On("GetRuntime", mock.Anything, mock.Anything).Return(graphql.RuntimeExt{
-				Runtime: graphql.Runtime{
-					ID:          config.runtimeID,
-					Name:        runtimeInput.Name,
-					Description: runtimeInput.Description,
-				},
-			}, nil)
-
-			directorServiceMock.On("UpdateRuntime", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-			directorServiceMock.On("SetRuntimeStatusCondition", mock.Anything, mock.Anything, mock.Anything).Return(nil)
-
-			uuidGenerator := uuid.NewUUIDGenerator()
-			provisioner := gardener.NewProvisioner(namespace, shootInterface, dbsFactory, auditLogPolicyCMName, maintenanceWindowConfigPath)
-
-			inputConverter := provisioning.NewInputConverter(uuidGenerator, "Project", defaultEnableKubernetesVersionAutoUpdate, defaultEnableMachineImageVersionAutoUpdate)
+			inputConverter := provisioning.NewInputConverter(uuidGeneratorMock, "Project", defaultEnableKubernetesVersionAutoUpdate, defaultEnableMachineImageVersionAutoUpdate, defaultEnableIMDSv2)
 			graphQLConverter := provisioning.NewGraphQLConverter()
-
-			runtimeRegistrationEnabled := true
 
 			provisioningService := provisioning.NewProvisioningService(
 				inputConverter,
 				graphQLConverter,
-				directorServiceMock,
 				dbsFactory,
 				provisioner,
-				uuidGenerator,
+				uuidGeneratorMock,
 				gardener.NewShootProvider(shootInterface),
 				provisioningQueue,
 				deprovisioningQueue,
 				shootUpgradeQueue,
-				kubeconfigProviderMock,
-				runtimeRegistrationEnabled)
+				kubeconfigProviderMock)
 
 			validator := api.NewValidator()
 
@@ -399,13 +372,12 @@ func testDeprovisionRuntime(t *testing.T, ctx context.Context, resolver *api.Res
 
 func fixOperationStatusProvisioned(runtimeId, operationId *string) *gqlschema.OperationStatus {
 	return &gqlschema.OperationStatus{
-		ID:               operationId,
-		Operation:        gqlschema.OperationTypeProvision,
-		State:            gqlschema.OperationStateSucceeded,
-		RuntimeID:        runtimeId,
-		CompassRuntimeID: runtimeId,
-		Message:          util.PtrTo("Operation succeeded"),
-		LastError:        &gqlschema.LastError{},
+		ID:        operationId,
+		Operation: gqlschema.OperationTypeProvision,
+		State:     gqlschema.OperationStateSucceeded,
+		RuntimeID: runtimeId,
+		Message:   util.PtrTo("Operation succeeded"),
+		LastError: &gqlschema.LastError{},
 	}
 }
 
@@ -420,8 +392,6 @@ func testProvisioningTimeouts() queue.ProvisioningTimeouts {
 		UpgradeTriggering:      5 * time.Minute,
 		ShootUpgrade:           5 * time.Minute,
 		ShootRefresh:           5 * time.Minute,
-		AgentConfiguration:     5 * time.Minute,
-		AgentConnection:        5 * time.Minute,
 	}
 }
 
@@ -434,8 +404,7 @@ func testDeprovisioningTimeouts() queue.DeprovisioningTimeouts {
 
 func testOperatorRoleBinding() provisioning2.OperatorRoleBinding {
 	return provisioning2.OperatorRoleBinding{
-		L2SubjectName: "runtimeOperator",
-		L3SubjectName: "runtimeAdmin",
+		CreatingForAdmin: true,
 	}
 }
 

@@ -1,18 +1,17 @@
 global:
   defaultTenant: 3e64ebae-38b5-46a0-b1ed-9ccee153a0ae
   images:
-    cloudsql_proxy_image: "europe-docker.pkg.dev/kyma-project/prod/tpi/cloudsql-docker/gce-proxy:v1.33.8-afb993b8"
+    cloudsql_proxy:
+      repository: eu.gcr.io/sap-ti-dx-kyma-mps-dev/images/cloudsql-proxy
+      tag: 2.11.3-sap
     containerRegistry:
       path: europe-docker.pkg.dev/kyma-project/prod
     schema_migrator:
       dir: control-plane/
-      version: "v20230120-865831c1"
+      version: "v20240613-0d0eb85f"
     subscription_cleanup_job:
       dir:
       version: "v20240129-70857389"
-    kyma_metrics_collector:
-      dir: control-plane/
-      version: "v20240304-150c94b2"
     tests:
       provisioner:
         dir: control-plane/
@@ -108,8 +107,6 @@ global:
       dbPassword: ""
       provisionerDBName: ""
       brokerDBName: ""
-  kyma_metrics_collector:
-    enabled: false
   mothership_reconciler:
     enabled: false
     expose: true
@@ -137,7 +134,8 @@ global:
       - name: "DEBUG_LOGGING_FOR_SPECIFIC_OPERATIONS"
         value: "true"
     # these components will NEVER be reconciled
-    skippedComponents: []
+    skippedComponents:
+      - "compass-runtime-agent"
   component_reconcilers:
     enabled: false
     authentication: true

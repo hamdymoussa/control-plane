@@ -98,24 +98,10 @@ spec:
                   name: {{ .Values.deployment.databaseEncryptionSecret | quote }}
                   key: secretKey
                   optional: false
-            - name: APP_DIRECTOR_OAUTH_PATH
-              value: /director-secret/director.yaml
-            - name: APP_DIRECTOR_URL
-              value: "https://{{ .Values.global.compass.tls.secure.oauth.host }}.{{ .Values.global.compass.domain | default .Values.global.ingress.domainName }}/director/graphql"
-            - name: APP_SKIP_DIRECTOR_CERT_VERIFICATION
-              value: {{ or .Values.global.isLocalEnv .Values.security.skipTLSCertificateVeryfication | quote }}
-            - name: APP_RUNTIME_REGISTRATION_ENABLED
-              value: {{ or .Values.compassIntegration.registratonEnabled | quote }}
-            - name: APP_RUNTIME_DEREGISTRATION_ENABLED
-              value: {{ or .Values.compassIntegration.deregistrationEnabled | quote }}
             - name: APP_PROVISIONING_TIMEOUT_INSTALLATION
               value: {{ .Values.installation.timeout | quote }}
             - name: APP_PROVISIONING_TIMEOUT_UPGRADE
               value: {{ .Values.installation.timeout | quote }}
-            - name: APP_PROVISIONING_TIMEOUT_AGENT_CONFIGURATION
-              value: {{ .Values.runtimeAgent.configurationTimeout | quote }}
-            - name: APP_PROVISIONING_TIMEOUT_AGENT_CONNECTION
-              value: {{ .Values.runtimeAgent.connectionTimeout | quote }}
             - name: APP_PROVISIONING_TIMEOUT_CLUSTER_CREATION
               value: {{ .Values.gardener.clusterCreationTimeout | quote }}
             - name: APP_PROVISIONING_TIMEOUT_UPGRADE_TRIGGERING
@@ -130,10 +116,6 @@ spec:
               value: {{ .Values.gardener.clusterCleanupTimeout | quote }}
             - name: APP_PROVISIONING_TIMEOUT_BINDINGS_CREATION
               value: {{ .Values.support.bindingsCreationTimeout | quote }}
-            - name: APP_OPERATOR_ROLE_BINDING_L2SUBJECT_NAME
-              value: {{ .Values.support.l2OperatorRoleBindingSubject | quote }}
-            - name: APP_OPERATOR_ROLE_BINDING_L3SUBJECT_NAME
-              value: {{ .Values.support.l3OperatorRoleBindingSubject | quote }}
             - name: APP_OPERATOR_ROLE_BINDING_CREATING_FOR_ADMIN
               value: {{ .Values.support.enabledCreatingRoleBindingForAdmin | quote }}
             - name: APP_GARDENER_PROJECT
@@ -152,6 +134,8 @@ spec:
               value: {{ .Values.gardener.defaultEnableKubernetesVersionAutoUpdate | quote }}
             - name: APP_GARDENER_DEFAULT_ENABLE_MACHINE_IMAGE_VERSION_AUTO_UPDATE
               value: {{ .Values.gardener.defaultEnableMachineImageVersionAutoUpdate | quote }}
+            - name: APP_GARDENER_DEFAULTENABLEIMDSV2
+              value: {{ .Values.gardener.defaultEnableIMDSv2 | quote }}
             - name: APP_LATEST_DOWNLOADED_RELEASES
               value: "10"
             - name: APP_DOWNLOAD_PRE_RELEASES
@@ -160,10 +144,9 @@ spec:
               value: {{ .Values.logs.level | quote }}
             - name: APP_ENQUEUE_IN_PROGRESS_OPERATIONS
               value: "true"
+            - name: APP_GARDENER_ENABLE_DUMP_SHOOT_SPEC
+              value: {{ .Values.gardener.enableDumpShootSpec | quote }}
           volumeMounts:
-            - name: director-oauth
-              mountPath: /director-secret/
-              readOnly: true
         {{if .Values.gardener.auditLogExtensionConfigMapName }}
             - mountPath: /gardener/tenant
               name: gardener-audit-log-tenant-config
@@ -181,6 +164,10 @@ spec:
             - name: cloudsql-sslrootcert
               mountPath: /secrets/cloudsql-sslrootcert
               readOnly: true
+        {{- end }}
+        {{- if .Values.gardener.enableDumpShootSpec }}
+            - name: testdata-storage
+              mountPath: /testdata/provisioner
         {{- end }}
         {{- with .Values.deployment.securityContext }}
           securityContext:
@@ -203,14 +190,18 @@ spec:
 
         {{- if and (eq .Values.global.database.embedded.enabled false) (eq .Values.global.database.cloudsqlproxy.enabled true)}}
         - name: cloudsql-proxy
-          image: {{ .Values.global.images.cloudsql_proxy_image }}
+          image: {{ .Values.global.images.cloudsql_proxy.repository }}:{{ .Values.global.images.cloudsql_proxy.tag }}
           {{- if .Values.global.database.cloudsqlproxy.workloadIdentity.enabled }}
-          command: ["/cloud_sql_proxy",
-                    "-instances={{ .Values.global.database.managedGCP.instanceConnectionName }}=tcp:5432"]
+          command: ["/cloud-sql-proxy",
+                    "{{ .Values.global.database.managedGCP.instanceConnectionName }}",
+                    "--private-ip",
+                    "--exit-zero-on-sigterm"]
           {{- else }}
-          command: ["/cloud_sql_proxy",
-                    "-instances={{ .Values.global.database.managedGCP.instanceConnectionName }}=tcp:5432",
-                    "-credential_file=/secrets/cloudsql-instance-credentials/credentials.json"]
+          command: ["/cloud-sql-proxy",
+                    "{{ .Values.global.database.managedGCP.instanceConnectionName }}",
+                    "--private-ip",
+                    "--exit-zero-on-sigterm",
+                    "--credentials-file=/secrets/cloudsql-instance-credentials/credentials.json"]
           volumeMounts:
             - name: cloudsql-instance-credentials
               mountPath: /secrets/cloudsql-instance-credentials
@@ -222,6 +213,11 @@ spec:
           {{- end }}
         {{- end}}
       volumes:
+      {{- if .Values.gardener.enableDumpShootSpec }}
+      - name: testdata-storage
+        emptyDir:
+          sizeLimit: 500Mi
+     {{- end}}
       {{- if and (eq .Values.global.database.embedded.enabled false) (eq .Values.global.database.cloudsqlproxy.enabled true) (eq .Values.global.database.cloudsqlproxy.workloadIdentity.enabled false)}}
       - name: cloudsql-instance-credentials
         secret:
@@ -250,7 +246,3 @@ spec:
           name: {{ .Values.gardener.maintenanceWindowConfigMapName }}
           optional: true
       {{end}}
-      - name: director-oauth
-        secret:
-          secretName: {{ .Values.directorFileSecret }}
-          optional: false

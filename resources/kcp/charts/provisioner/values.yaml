@@ -3,7 +3,7 @@ global:
     path: europe-docker.pkg.dev/kyma-project
   images:
     provisioner:
-      version: "v20240314-5a3b7691"
+      version: "v20240521-bc0d8345"
       dir: "prod"
 serviceMonitor:
   enabled: true
@@ -55,10 +55,10 @@ gardener:
   clusterUpgradeTimeout: 90m
   defaultEnableKubernetesVersionAutoUpdate: false
   defaultEnableMachineImageVersionAutoUpdate: false
+  defaultEnableIMDSv2: false
+  enableDumpShootSpec: false
 
 support:
-  l2OperatorRoleBindingSubject: "runtimeOperator"
-  l3OperatorRoleBindingSubject: "runtimeAdmin"
   enabledCreatingRoleBindingForAdmin: false
   bindingsCreationTimeout: 5m
 
@@ -71,16 +71,8 @@ kymaRelease:
 installation:
   timeout: 22h
 
-compassIntegration:
-  registratonEnabled: true
-  deregistrationEnabled: true
-
 upgrade:
   triggeringTimeout: 20m
-
-runtimeAgent:
-  configurationTimeout: 1h
-  connectionTimeout: 1h
 
 metrics:
   port: 9000
